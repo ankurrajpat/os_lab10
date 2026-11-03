@@ -1,0 +1,48 @@
+name: Normalize tested submission layout
+on:
+  push:
+    paths:
+      - '.github/workflows/main.yml'
+permissions:
+  contents: write
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact tested package with normal paths
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, zipfile
+          root = pathlib.Path('.')
+          package = root / '44-OS_Assignment_10_tested.zip'
+          assert hashlib.sha256(package.read_bytes()).hexdigest() == '491aa5ba8688a20b19a6c45e90b2dc7996e653d5c98620d19f901297c1231d2d'
+          z = zipfile.ZipFile(package)
+          for name in z.namelist():
+              p = pathlib.PurePosixPath(name)
+              assert not p.is_absolute() and '..' not in p.parts
+          for info in z.infolist():
+              parts = pathlib.PurePosixPath(info.filename).parts
+              assert parts[0] == 'assn10'
+              if len(parts) == 1:
+                  continue
+              target = root.joinpath(*parts[1:])
+              if info.is_dir():
+                  target.mkdir(parents=True, exist_ok=True)
+              else:
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(z.read(info))
+          (root / 'OS_Assignment_10_tested.zip').write_bytes(package.read_bytes())
+          for p in root.iterdir():
+              if p.is_file() and p.name.split('-', 1)[0].isdigit() and 28 <= int(p.name.split('-', 1)[0]) <= 53:
+                  p.unlink()
+          readme = (root / 'README.md').read_text()
+          readme = readme.replace('## Build', 'Clone this repository and build directly in `source/`. The exact tested ZIP is also retained at the repository root.\n\n## Build', 1)
+          (root / 'README.md').write_text(readme)
+          PY
+          git add source evidence report.pdf assignment10.patch SHA256SUMS README.md OS_Assignment_10_tested.zip
+          git add -u
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Restore normal source paths and organize tested submission'
+          git push
