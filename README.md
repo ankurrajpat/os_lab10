@@ -10,8 +10,6 @@ This is 32-bit x86 xv6, selected because the assignment uses walkpgdir and usys.
 It is not compatible with xv6-riscv without porting.
 The upstream MIT license is included in source/LICENSE.
 
-Clone this repository and build directly in `source/`. The exact tested ZIP is also retained at the repository root.
-
 ## Build and run
 
 Install GCC/binutils supporting `-m32`, GNU make, Perl, and QEMU x86.
