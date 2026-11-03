@@ -1,39 +1,80 @@
 # OS Assignment 10: xv6 x86
 
-The complete, buildable source tree, four assignment demonstrations, supplemental edge-case test, real QEMU screenshots and two-page report are in **OS_Assignment_10_tested.zip**. Download and extract that package, then follow its README. The individual changed source files, screenshots, patch and report are also uploaded here for convenient inspection. Browser-uploaded filenames have numeric prefixes; use the filenames inside the ZIP to build.
+This package contains a complete buildable xv6-public tree in `source/`,
+all four required user programs, supplemental vmcheck, real execution
+screenshots and serial output in `evidence/`, and the two-page `report.pdf`.
+
+Base: https://github.com/mit-pdos/xv6-public
+Commit: eeb7b415dbcb12cc362d0783e41c3d1f44066b17
+This is 32-bit x86 xv6, selected because the assignment uses walkpgdir and usys.S.
+It is not compatible with xv6-riscv without porting.
+The upstream MIT license is included in source/LICENSE.
+
+Clone this repository and build directly in `source/`. The exact tested ZIP is also retained at the repository root.
 
 ## Build and run
 
-Inside the extracted package:
+Install GCC/binutils supporting `-m32`, GNU make, Perl, and QEMU x86.
+On a typical Debian/Ubuntu machine:
 
-```sh
-cd source
-make
-make qemu-nox CPUS=1 QEMUEXTRA='-m 512'
-```
+    sudo apt install build-essential gcc-multilib qemu-system-x86
+    cd source
+    make xv6.img fs.img
+    make qemu-nox CPUS=1
 
-At the xv6 prompt run `memtest`, `vttest`, `pagetest`, `pagereplace`, `vmcheck` and `usertests`. Exit QEMU with Ctrl-A, then X. See the packaged README for a fresh usertests run and environment notes.
+At the xv6 `$` prompt, run:
 
-## Verification
+    memtest
+    vttest
+    pagetest
+    pagereplace
+    vmcheck
+    usertests
 
-All four required demos, `vmcheck` and the complete built-in `usertests` passed in QEMU. The expected protection-test child fault is trap 14 / error 7; the parent still reads 42. Full terminal output and clean-build output are included. Screenshots are actual execution captures, not generated terminal images.
+Exit QEMU with Ctrl-A, then X. For a new full usertests run, rebuild fs.img
+from scratch: usertests creates a marker and otherwise refuses to run twice.
 
-Page-replacement faults (FIFO / LRU / Optimal):
+    rm -f fs.img
+    make fs.img
 
-| Frames | FIFO | LRU | Optimal |
-|---|---:|---:|---:|
-| 3 | 15 | 12 | 9 |
-| 4 | 10 | 8 | 8 |
-| 5 | 9 | 7 | 7 |
+## Changes
 
-These nine counts were independently checked. Page replacement is a user-space simulation, not a kernel swap subsystem. The source is based on MIT's xv6-public, with its original LICENSE included in the package.
+- kalloc.c: successful allocations, runtime frees, boot supply and locked snapshot.
+  Boot free-list seeding is excluded from runtime frees so current = alloc - free
+  is nonnegative. Available pages count the current free list. Statistics cover
+  allocator-managed physical pages, not reserved kernel pages/all installed RAM.
+- vm.c: read-only walkpgdir helpers, frame+offset translation, P/W/U inspection,
+  PTE_W removal and CR3 reload. User calls reject kernel/out-of-process addresses.
+- sysproc.c, syscall.c, syscall.h, defs.h, user.h, usys.S: four syscall paths.
+- Makefile: four required demos and supplemental vmcheck in UPROGS.
+- memtest.c / vttest.c / pagetest.c / pagereplace.c: required demonstrations.
+- vmcheck.c: invalid-address and translation-offset checks.
 
-Exact package: 828,228 bytes. SHA-256:
+Every assignment edit is identified by Assignment 10 comments.
+`assignment10.patch` includes tracked-file changes; all five new user programs
+are supplied separately in source/ (not duplicated inside that patch).
 
-```
-491aa5ba8688a20b19a6c45e90b2dc7996e653d5c98620d19f901297c1231d2d
-```
+## Verified results
+
+Built with GCC 11.4.0, QEMU 6.2.0, one CPU, 512 MB machine RAM, stock PHYSTOP
+224 MB. All required demos, vmcheck and the complete built-in usertests passed.
+The expected page-protection child fault is trap 14 / error 7, with parent read
+still 42. The built-in suite emits intentional protection/OOM diagnostics and
+finishes ALL TESTS PASSED. Serial logs retain the full run; screenshots are
+pixel captures of the actual terminal session, trimmed only at unused edges.
+The replacement summary image is a crop of the full Q4 screenshot.
+
+Faults FIFO / LRU / Optimal:
+- 3 frames: 15 / 12 / 9
+- 4 frames: 10 / 8 / 8
+- 5 frames: 9 / 7 / 7
+
+All nine rows independently checked with a separate Python implementation.
+The replacement program is a user-space simulation, not a kernel swap subsystem.
+Physical addresses and cumulative counters vary with process activity.
 
 ## Service-access status
 
-Claude and Gemini sign-in hit CAPTCHA challenges. Neither service generated or reviewed these sources. This is an independently implemented and tested version. No paid plan was started, and no credentials are included.
+A new Google account was created as requested. Claude and Gemini sign-in hit
+CAPTCHA challenges. Neither service generated or reviewed these sources.
+No paid plan was started. No credentials are included in this package.
