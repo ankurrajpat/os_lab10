@@ -1,0 +1,317 @@
+diff --git a/Makefile b/Makefile
+index 09d790c..66d5312 100644
+--- a/Makefile
++++ b/Makefile
+@@ -165,6 +165,7 @@ mkfs: mkfs.c fs.h
+ # http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
+ .PRECIOUS: %.o
+ 
++# Assignment 10: include four required demos and supplemental vmcheck.
+ UPROGS=\
+ 	_cat\
+ 	_echo\
+@@ -181,6 +182,11 @@ UPROGS=\
+ 	_usertests\
+ 	_wc\
+ 	_zombie\
++	_memtest\
++	_vttest\
++	_pagetest\
++	_pagereplace\
++	_vmcheck\
+ 
+ fs.img: mkfs README $(UPROGS)
+ 	./mkfs fs.img README $(UPROGS)
+diff --git a/defs.h b/defs.h
+index 82fb982..ce4d74e 100644
+--- a/defs.h
++++ b/defs.h
+@@ -68,6 +68,7 @@ char*           kalloc(void);
+ void            kfree(char*);
+ void            kinit1(void*, void*);
+ void            kinit2(void*, void*);
++void            getmemstats(int*, int*, int*);   // Assignment 10 Q1
+ 
+ // kbd.c
+ void            kbdintr(void);
+@@ -174,6 +175,9 @@ void            uartputc(int);
+ void            seginit(void);
+ void            kvmalloc(void);
+ pde_t*          setupkvm(void);
++int             v2paddr(pde_t*, uint, uint*);      // Assignment 10 Q2
++int             pageinfofor(pde_t*, uint, uint*, uint*);  // Assignment 10 Q3a
++int             setreadonlypage(pde_t*, uint);     // Assignment 10 Q3b
+ char*           uva2ka(pde_t*, char*);
+ int             allocuvm(pde_t*, uint, uint);
+ int             deallocuvm(pde_t*, uint, uint);
+diff --git a/kalloc.c b/kalloc.c
+index 14cd4f4..0e728ba 100644
+--- a/kalloc.c
++++ b/kalloc.c
+@@ -21,6 +21,10 @@ struct {
+   struct spinlock lock;
+   int use_lock;
+   struct run *freelist;
++  int nalloc;   // Assignment 10 Q1: cumulative pages allocated by kalloc()
++  int nfree;    // Assignment 10 Q1: runtime pages freed (excludes boot seeding)
++  int nseed;    // Pages supplied by freerange during boot
++  int seeding;  // Distinguish initial free-list population from deallocation
+ } kmem;
+ 
+ // Initialization happens in two phases.
+@@ -47,11 +51,32 @@ void
+ freerange(void *vstart, void *vend)
+ {
+   char *p;
++  kmem.seeding = 1;  // Assignment 10: initial pages are not deallocations
+   p = (char*)PGROUNDUP((uint)vstart);
+   for(; p + PGSIZE <= (char*)vend; p += PGSIZE)
+     kfree(p);
++  kmem.seeding = 0;
+ }
+ //PAGEBREAK: 21
++// Assignment 10 Q1: report allocator statistics for the memstats() syscall.
++// total_alloc/total_free count successful runtime operations; avail counts pages
++// currently sitting on the free list.
++void
++getmemstats(int *total_alloc, int *total_free, int *avail)
++{
++  struct run *r;
++
++  if(kmem.use_lock)
++    acquire(&kmem.lock);
++  *total_alloc = kmem.nalloc;
++  *total_free = kmem.nfree;
++  *avail = 0;
++  for(r = kmem.freelist; r; r = r->next)
++    (*avail)++;
++  if(kmem.use_lock)
++    release(&kmem.lock);
++}
++
+ // Free the page of physical memory pointed at by v,
+ // which normally should have been returned by a
+ // call to kalloc().  (The exception is when
+@@ -72,6 +97,10 @@ kfree(char *v)
+   r = (struct run*)v;
+   r->next = kmem.freelist;
+   kmem.freelist = r;
++  if(kmem.seeding)
++    kmem.nseed++;  // Assignment 10: count initial supply separately
++  else
++    kmem.nfree++;  // Assignment 10: runtime deallocation
+   if(kmem.use_lock)
+     release(&kmem.lock);
+ }
+@@ -87,8 +116,10 @@ kalloc(void)
+   if(kmem.use_lock)
+     acquire(&kmem.lock);
+   r = kmem.freelist;
+-  if(r)
++  if(r){
+     kmem.freelist = r->next;
++    kmem.nalloc++;         // Assignment 10 Q1: count this allocated page
++  }
+   if(kmem.use_lock)
+     release(&kmem.lock);
+   return (char*)r;
+diff --git a/syscall.c b/syscall.c
+index ee85261..b020a5b 100644
+--- a/syscall.c
++++ b/syscall.c
+@@ -102,6 +102,10 @@ extern int sys_sleep(void);
+ extern int sys_unlink(void);
+ extern int sys_wait(void);
+ extern int sys_write(void);
++extern int sys_memstats(void);     // Assignment 10 Q1
++extern int sys_vtop(void);         // Assignment 10 Q2
++extern int sys_pageinfo(void);     // Assignment 10 Q3a
++extern int sys_setreadonly(void);  // Assignment 10 Q3b
+ extern int sys_uptime(void);
+ 
+ static int (*syscalls[])(void) = {
+@@ -126,6 +130,10 @@ static int (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_memstats]    sys_memstats,     // Assignment 10 Q1
++[SYS_vtop]        sys_vtop,         // Assignment 10 Q2
++[SYS_pageinfo]    sys_pageinfo,     // Assignment 10 Q3a
++[SYS_setreadonly] sys_setreadonly,  // Assignment 10 Q3b
+ };
+ 
+ void
+diff --git a/syscall.h b/syscall.h
+index bc5f356..69a033f 100644
+--- a/syscall.h
++++ b/syscall.h
+@@ -20,3 +20,7 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_memstats    22   // Assignment 10 Q1
++#define SYS_vtop        23   // Assignment 10 Q2
++#define SYS_pageinfo    24   // Assignment 10 Q3a
++#define SYS_setreadonly 25   // Assignment 10 Q3b
+diff --git a/sysproc.c b/sysproc.c
+index 0686d29..9606fd9 100644
+--- a/sysproc.c
++++ b/sysproc.c
+@@ -42,6 +42,72 @@ sys_getpid(void)
+   return myproc()->pid;
+ }
+ 
++// Assignment 10 Q1: memstats() - display physical memory statistics.
++int
++sys_memstats(void)
++{
++  int total_alloc, total_free, avail;
++
++  getmemstats(&total_alloc, &total_free, &avail);
++  cprintf("total allocated pages: %d\n", total_alloc);
++  cprintf("total freed pages: %d\n", total_free);
++  cprintf("currently allocated pages: %d\n", total_alloc - total_free);
++  cprintf("available physical memory pages: %d\n", avail);
++  return 0;
++}
++
++// Assignment 10 Q2: vtop(va) - translate virtual to physical address.
++// Returns the physical address, or -1 when va is not mapped.
++int
++sys_vtop(void)
++{
++  int va;
++  uint pa;
++
++  if(argint(0, &va) < 0 || (uint)va >= myproc()->sz ||
++     (uint)va >= KERNBASE) // Assignment 10: reject kernel/out-of-process VAs
++    return -1;
++  if(v2paddr(myproc()->pgdir, (uint)va, &pa) < 0){
++    cprintf("vtop: virtual address %x is not mapped\n", va);
++    return -1;
++  }
++  return (int)pa;
++}
++
++// Assignment 10 Q3a: pageinfo(va) - display frame number and P/W/U flags.
++int
++sys_pageinfo(void)
++{
++  int va;
++  uint frame, flags;
++
++  if(argint(0, &va) < 0 || (uint)va >= myproc()->sz ||
++     (uint)va >= KERNBASE) // Assignment 10: reject kernel/out-of-process VAs
++    return -1;
++  if(pageinfofor(myproc()->pgdir, (uint)va, &frame, &flags) < 0){
++    cprintf("pageinfo: virtual address %x is not mapped\n", va);
++    return -1;
++  }
++  cprintf("pageinfo: va=%x frame=%d P=%d W=%d U=%d\n",
++          va, frame,
++          (flags & PTE_P) ? 1 : 0,
++          (flags & PTE_W) ? 1 : 0,
++          (flags & PTE_U) ? 1 : 0);
++  return 0;
++}
++
++// Assignment 10 Q3b: setreadonly(va) - make the page holding va read-only.
++int
++sys_setreadonly(void)
++{
++  int va;
++
++  if(argint(0, &va) < 0 || (uint)va >= myproc()->sz ||
++     (uint)va >= KERNBASE) // Assignment 10: reject kernel/out-of-process VAs
++    return -1;
++  return setreadonlypage(myproc()->pgdir, (uint)va);
++}
++
+ int
+ sys_sbrk(void)
+ {
+diff --git a/user.h b/user.h
+index 4f99c52..f3ae87d 100644
+--- a/user.h
++++ b/user.h
+@@ -22,6 +22,10 @@ int dup(int);
+ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
++int memstats(void);      // Assignment 10 Q1
++int vtop(int);           // Assignment 10 Q2
++int pageinfo(int);       // Assignment 10 Q3a
++int setreadonly(int);    // Assignment 10 Q3b
+ int uptime(void);
+ 
+ // ulib.c
+diff --git a/usys.S b/usys.S
+index 8bfd8a1..d2aee52 100644
+--- a/usys.S
++++ b/usys.S
+@@ -28,4 +28,8 @@ SYSCALL(dup)
+ SYSCALL(getpid)
+ SYSCALL(sbrk)
+ SYSCALL(sleep)
++SYSCALL(memstats)     # Assignment 10 Q1
++SYSCALL(vtop)         # Assignment 10 Q2
++SYSCALL(pageinfo)     # Assignment 10 Q3a
++SYSCALL(setreadonly)  # Assignment 10 Q3b
+ SYSCALL(uptime)
+diff --git a/vm.c b/vm.c
+index 7134cff..e655139 100644
+--- a/vm.c
++++ b/vm.c
+@@ -114,6 +114,52 @@ static struct kmap {
+  { (void*)DEVSPACE, DEVSPACE,      0,         PTE_W}, // more devices
+ };
+ 
++// Assignment 10 Q2: translate a virtual address to a physical address
++// using walkpgdir().  Returns 0 and stores the result in *pa on success,
++// -1 when the address has no valid, present page-table entry.
++int
++v2paddr(pde_t *pgdir, uint va, uint *pa)
++{
++  pte_t *pte;
++
++  pte = walkpgdir(pgdir, (void*)va, 0);   // alloc=0: never create entries
++  if(pte == 0 || !(*pte & PTE_P) || !(*pte & PTE_U))         // entry must exist and be present
++    return -1;
++  *pa = PTE_ADDR(*pte) | (va & 0xFFF);    // frame base + offset within page
++  return 0;
++}
++
++// Assignment 10 Q3a: fetch the physical frame number and the page-table
++// flags (P, W, U) of the page holding virtual address va.
++int
++pageinfofor(pde_t *pgdir, uint va, uint *frame, uint *flags)
++{
++  pte_t *pte;
++
++  pte = walkpgdir(pgdir, (void*)va, 0);
++  if(pte == 0 || !(*pte & PTE_P) || !(*pte & PTE_U))
++    return -1;
++  *frame = PTE_ADDR(*pte) >> 12;          // physical frame number
++  *flags = *pte & 0xFFF;                  // low 12 bits hold the flags
++  return 0;
++}
++
++// Assignment 10 Q3b: remove write permission (PTE_W) from the page-table
++// entry of the page holding va.  Returns 0 on success, -1 if unmapped.
++int
++setreadonlypage(pde_t *pgdir, uint va)
++{
++  pte_t *pte;
++
++  pte = walkpgdir(pgdir, (void*)va, 0);
++  if(pte == 0 || !(*pte & PTE_P) || !(*pte & PTE_U))
++    return -1;
++  *pte = *pte & ~PTE_W;                   // clear the writable bit
++  lcr3(V2P(pgdir));                       // flush the TLB so the new
++                                          // permission takes effect at once
++  return 0;
++}
++
+ // Set up kernel part of a page table.
+ pde_t*
+ setupkvm(void)
